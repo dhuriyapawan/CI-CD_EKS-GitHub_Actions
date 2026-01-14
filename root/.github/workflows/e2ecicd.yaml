@@ -1,0 +1,264 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [dev, staging, prod]
+    paths-ignore:
+      - version
+      - README.md
+
+  pull_request:
+    types: [closed]
+    branches: [dev]
+    paths-ignore:
+      - version
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      releaseTrue: ${{ steps.release-status.outputs.rel-status }}
+      currentVersion: ${{ steps.updated-version.outputs.version }}
+      currentENV: ${{ steps.current-env.outputs.ENV }}
+
+    steps:
+      # -----------------------------
+      # Checkout & Node Setup
+      # -----------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: |
+          cd app
+          npm install
+
+      - name: Run tests
+        run: |
+          cd app
+          npm test
+
+      # -----------------------------
+      # Versioning Logic
+      # -----------------------------
+      - name: Determine version increment
+        id: version-increment
+        run: |
+          commit_message=$(git log -1 --pretty=%B)
+
+          if [[ "$commit_message" == *"major:"* ]]; then
+            echo "increment=major" >> $GITHUB_OUTPUT
+            echo "release=true" >> $GITHUB_OUTPUT
+          elif [[ "$commit_message" == *"minor:"* ]]; then
+            echo "increment=minor" >> $GITHUB_OUTPUT
+            echo "release=true" >> $GITHUB_OUTPUT
+          elif [[ "$commit_message" == *"patch:"* ]]; then
+            echo "increment=patch" >> $GITHUB_OUTPUT
+            echo "release=true" >> $GITHUB_OUTPUT
+          else
+            echo "release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish release status
+        id: release-status
+        run: |
+          echo "rel-status=${{ steps.version-increment.outputs.release }}" >> $GITHUB_OUTPUT
+
+      - name: Publish current environment
+        id: current-env
+        run: |
+          ENVIRONMENT=$(echo "${GITHUB_REF}" | sed 's|refs/heads/||')
+          echo "ENV=${ENVIRONMENT}" >> $GITHUB_OUTPUT
+
+      - name: Get current version
+        id: get-version
+        run: |
+          version=$(cat version)
+          echo "version=${version}" >> $GITHUB_OUTPUT
+
+      - name: Increment version
+        id: increment-version
+        if: github.ref == 'refs/heads/dev' && steps.version-increment.outputs.release == 'true'
+        run: |
+          new_version=$(docker run --rm -v ${PWD}:/app treeder/bump ${{ steps.version-increment.outputs.increment }})
+          echo "new_version=${new_version}" >> $GITHUB_OUTPUT
+
+      - name: Update version file
+        if: github.ref == 'refs/heads/dev' && steps.version-increment.outputs.release == 'true'
+        run: |
+          echo "${{ steps.increment-version.outputs.new_version }}" > version
+
+      - name: Get updated version
+        id: updated-version
+        if: github.ref == 'refs/heads/dev' && steps.version-increment.outputs.release == 'true'
+        run: |
+          echo "version=${{ steps.increment-version.outputs.new_version }}" >> $GITHUB_OUTPUT
+
+      # -----------------------------
+      # Commit Version File
+      # -----------------------------
+      - name: Commit VERSION file
+        uses: EndBug/add-and-commit@v9
+        if: github.ref == 'refs/heads/dev' && steps.version-increment.outputs.release == 'true'
+        with:
+          add: version
+          message: "Updating VERSION file"
+          push: true
+          tag: ${{ steps.updated-version.outputs.version }}
+          tag_push: true
+
+      # -----------------------------
+      # Docker Build & Push
+      # -----------------------------
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Docker build & push
+        run: |
+          cd app
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/node-app:${{ steps.updated-version.outputs.version }}-${{ steps.current-env.outputs.ENV }} .
+          docker push ${{ secrets.DOCKER_USERNAME }}/node-app:${{ steps.updated-version.outputs.version }}-${{ steps.current-env.outputs.ENV }}
+
+  # ===================================================
+  # DEPLOYMENT JOB
+  # ===================================================
+  deployment:
+    needs: build
+    runs-on: ubuntu-latest
+
+    env:
+      ENVIRONMENT: ${{ needs.build.outputs.currentENV }}
+      VERSION: ${{ needs.build.outputs.currentVersion }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: |
+          cd terraform
+          terraform init
+
+      - name: Terraform Apply
+        run: |
+          cd terraform
+          terraform apply -auto-approve
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region $AWS_DEFAULT_REGION \
+            --name e2ecicd-eks-${ENVIRONMENT}
+
+      - name: Deploy using Kustomize
+        run: |
+          kubectl apply -k kustomize/overlays/${ENVIRONMENT}
+
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          fields: workflow,job,repo,ref,author
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+
+# ┌───────────────┐
+# │ GitHub Event  │
+# │ (Push / PR)   │
+# └───────┬───────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ Build Job (CI)     │
+# │--------------------│
+# │ • Checkout Code    │
+# │ • Setup Node.js    │
+# │ • npm install      │
+# │ • Run Tests        │
+# └───────┬────────────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ Versioning Logic   │
+# │--------------------│
+# │ • Read Commit Msg  │
+# │ • major/minor/patch│
+# │ • Update VERSION   │
+# │ • Git Tag          │
+# └───────┬────────────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ Docker Build       │
+# │--------------------│
+# │ • Build Image      │
+# │ • Tag per ENV      │
+# │ • Push to Hub      │
+# └───────┬────────────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ Build Outputs      │
+# │--------------------│
+# │ • ENV              │
+# │ • VERSION          │
+# │ • RELEASE FLAG     │
+# └───────┬────────────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ Deployment Job     │
+# │ (CD)               │
+# └───────┬────────────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ Terraform          │
+# │--------------------│
+# │ • Init             │
+# │ • Apply            │
+# │ • EKS Infra        │
+# └───────┬────────────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ Kubernetes Deploy  │
+# │--------------------│
+# │ • Kustomize Apply  │
+# │ • Rollout Restart  │
+# └───────┬────────────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ DNS Update         │
+# │--------------------│
+# │ • Get LB Hostname  │
+# │ • Cloudflare DNS   │
+# └───────┬────────────┘
+#         │
+#         ▼
+# ┌────────────────────┐
+# │ Slack Notification │
+# │--------------------│
+# │ • Release / Deploy │
+# └────────────────────┘

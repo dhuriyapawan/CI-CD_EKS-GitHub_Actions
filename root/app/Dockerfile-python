@@ -1,0 +1,40 @@
+# Use a smaller base image for reduced size
+FROM python:3.11-alpine
+
+# Set a working directory
+WORKDIR /app
+
+# Set environment variables for performance and security
+ENV FLASK_APP=app.py \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Install dependencies
+COPY requirements.txt .  
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
+COPY . .
+
+# Use a non-root user for security
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
+# Expose the Flask port
+EXPOSE 5000
+
+# Run the application
+CMD ["flask", "run", "--host=0.0.0.0", "--port=5000"]
+
+# flowchart TD
+#     A[Start Docker Build] --> B[Base Image<br/>python:3.11-alpine]
+#     B --> C[Set Working Directory<br/>/app]
+#     C --> D[Set Environment Variables<br/>FLASK_APP, PYTHONUNBUFFERED, PIP_NO_CACHE_DIR]
+#     D --> E[Copy requirements.txt]
+#     E --> F[Install Python Dependencies<br/>pip install -r requirements.txt]
+#     F --> G[Copy Application Source Code]
+#     G --> H[Create Non-root User<br/>appuser]
+#     H --> I[Switch to appuser]
+#     I --> J[Expose Port 5000]
+#     J --> K[Run Flask App<br/>flask run --host 0.0.0.0]
+#     K --> L[Container Running]
