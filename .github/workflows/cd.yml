@@ -5,6 +5,10 @@ on:
     branches: [master]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      run_id:
+        required: true
+
 
 env:
   AWS_REGION: us-east-1
