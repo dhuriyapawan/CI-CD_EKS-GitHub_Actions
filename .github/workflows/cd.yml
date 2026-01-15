@@ -3,7 +3,7 @@ name: CD pipeline
 on:
   push:
     branches: [master]
-    tags: ['v*.*.*']
+    tags: ['v*']
   workflow_dispatch:
 
 env:
@@ -108,4 +108,5 @@ jobs:
 #      ↓
 # Verify rollout
 #      ↓
-# Smoke test
+# Smoke test test
+ 
