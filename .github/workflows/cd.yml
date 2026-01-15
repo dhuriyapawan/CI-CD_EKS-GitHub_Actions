@@ -90,6 +90,27 @@ jobs:
           sudo mv eksctl /usr/local/bin
           eksctl version
 
+      - name: Check if EKS cluster exists
+        id: check_cluster
+        run: |
+           if aws eks describe-cluster \
+            --name $EKS_CLUSTER_NAME \
+            --region $AWS_REGION >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+           else
+            echo "exists=false" >> $GITHUB_OUTPUT
+           fi
+
+      - name: Create EKS cluster (only if not exists)
+        if: steps.check_cluster.outputs.exists == 'false'
+        run: |
+          eksctl create cluster \
+          --name $EKS_CLUSTER_NAME \
+          --region $AWS_REGION \
+          --nodegroup-name workers \
+          --node-type t3.medium \
+          --nodes 2
+
       # Step 4: Create EKS cluster
       - name: Create EKS cluster
         run: |
