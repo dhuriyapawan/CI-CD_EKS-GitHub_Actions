@@ -56,18 +56,18 @@ jobs:
 
       
 
-      - name: Update deployment image
-        run: |
-         sed -i "s|image:.*|image: ${{ steps.build-image.outputs.image }}|g" kustomize/base/deploy.yaml
+      # - name: Update deployment image
+      #   run: |
+      #    sed -i "s|image:.*|image: ${{ steps.build-image.outputs.image }}|g" kustomize/base/deploy.yaml
 
 
-      - name: Commit updated deployment
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "github-actions"
-          git add kustomize/base/deployment.yaml
-          git commit -m "Update deployment image to ${{ github.sha }}" || exit 0
-          git push
+      # - name: Commit updated deployment
+      #   run: |
+      #     git config --local user.email "action@github.com"
+      #     git config --local user.name "github-actions"
+      #     git add kustomize/base/deployment.yaml
+      #     git commit -m "Update deployment image to ${{ github.sha }}" || exit 0
+      #     git push
 
   deploy-to-eks:
     needs: build-and-push
