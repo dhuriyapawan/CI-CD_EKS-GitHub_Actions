@@ -58,8 +58,8 @@ jobs:
 
       - name: Update deployment image
         run: |
-          cd kustomize/base
-          sed -i 's|image: .*|image: '"${{ steps.build-image.outputs.image }}"'|g' deployment.yaml
+         sed -i "s|image:.*|image: ${{ steps.build-image.outputs.image }}|g" kustomize/base/deploy.yaml
+
 
       - name: Commit updated deployment
         run: |
