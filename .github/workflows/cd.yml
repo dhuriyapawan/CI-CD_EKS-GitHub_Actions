@@ -11,7 +11,7 @@ on:
 
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: us-west-1
   ECR_REPOSITORY: calculator-app
   EKS_CLUSTER_NAME: calculator-cluster
   EKS_SERVICE_NAME: calculator-service
@@ -105,6 +105,11 @@ jobs:
         run: |
           kubectl apply -k kustomize/base
           kubectl rollout status deployment/web-deployment -n default
+      
+      - name: Update Kustomize image
+        run: |
+          IMAGE= ${{ steps.build-image.outputs.image }}
+          kubectl set image -k $KUSTOMIZE_PATH web-deployment=$IMAGE -n $NAMESPACE --record
 
 
       - name: Verify deployment
