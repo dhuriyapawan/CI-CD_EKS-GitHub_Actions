@@ -1,83 +1,140 @@
-name: CI/CD to EKS
+name: CD pipeline
 
 on:
   push:
-    branches:
-      -master
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      run_id:
+        required: true
+
 
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: calculator-app
   EKS_CLUSTER_NAME: calculator-cluster
-  KUSTOMIZE_PATH: kustomize/base
-  NAMESPACE: default
+  EKS_SERVICE_NAME: calculator-service
 
 jobs:
-  build-and-deploy:
+  build-and-push:
     runs-on: ubuntu-latest
-
     steps:
-      # Step 1: Checkout code
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-      # Step 2: Configure AWS credentials
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Step 3: Login to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      # Step 4: Build Docker image
-      - name: Build Docker image
+      - name: Create ECR repository if it does not exist
+        run: |
+              aws ecr describe-repositories \
+              --repository-names calculator-app \
+              --region $AWS_REGION \
+              || aws ecr create-repository \
+              --repository-name calculator-app \
+              --region $AWS_REGION
+
+
+      - name: Build, tag, and push image to Amazon ECR
         id: build-image
-        run: |
-          IMAGE_TAG=${GITHUB_SHA::8}
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
-          
-          # Build and push image
-          docker build -t $IMAGE_URI ./app
-          docker push $IMAGE_URI
+        uses: docker/build-push-action@v2
+        with:
+           context: ./app
+           push: true
+           tags: |
+             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+             ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
 
-          # Save image URI for later steps
-          echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
+      
 
-      # Step 5: Install kubectl and eksctl
-      - name: Install kubectl and eksctl
+      # - name: Update deployment image
+      #   run: |
+      #    sed -i "s|image:.*|image: ${{ steps.build-image.outputs.image }}|g" kustomize/base/deploy.yaml
+
+
+      # - name: Commit updated deployment
+      #   run: |
+      #     git config --local user.email "action@github.com"
+      #     git config --local user.name "github-actions"
+      #     git add kustomize/base/deployment.yaml
+      #     git commit -m "Update deployment image to ${{ github.sha }}" || exit 0
+      #     git push
+
+  deploy-to-eks:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Step 3: Install eksctl
+      - name: Install eksctl
         run: |
-          curl -sLO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/
-          
           curl -sSL https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_Linux_amd64.tar.gz | tar xz
           sudo mv eksctl /usr/local/bin
-          kubectl version --client
           eksctl version
 
-      # Step 6: Update kubeconfig to access EKS
-      - name: Update kubeconfig
+      # Step 4: Create EKS cluster
+      - name: Create EKS cluster
         run: |
-          aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
-          kubectl get nodes
+          eksctl create cluster \
+            --name $EKS_CLUSTER_NAME \
+            --region $AWS_REGION \
+            --nodegroup-name workers \
+            --node-type t3.medium \
+            --nodes 2
 
-      # Step 7: Update Kustomize manifests with new image
-      - name: Update Kustomize image
-        run: |
-          IMAGE=${{ steps.build-image.outputs.image }}
-          kubectl set image -k $KUSTOMIZE_PATH web-deployment=$IMAGE -n $NAMESPACE --record
 
-      # Step 8: Deploy using Kustomize
-      - name: Apply Kustomize manifests
+      - name: Deploy to EKS using kubectl
         run: |
-          kubectl apply -k $KUSTOMIZE_PATH -n $NAMESPACE
+          kubectl apply -k kustomize/base
+          kubectl rollout status deployment/web-deployment -n default
 
-      # Step 9: Wait for deployment rollout
-      - name: Wait for deployment rollout
+
+      - name: Verify deployment
         run: |
-          kubectl rollout status deployment/web-deployment -n $NAMESPACE
+          kubectl rollout status deployment/web-deployment -n default --timeout=120s
+          kubectl get pods -n default
+
+      - name: Run smoke tests
+        run: |
+          sleep 30
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://$(kubectl get svc calculator-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'))
+          if [ "$RESPONSE" -ne 200 ]; then
+            echo "Smoke test failed with response code $RESPONSE"
+            exit 1
+          else
+            echo "Smoke test passed with response code $RESPONSE"
+          fi
+# #Git Push / Tag
+#      ↓
+# Build Docker Image
+#      ↓
+# Push to ECR
+#      ↓
+# Update deployment.yaml
+#      ↓
+# Commit back to Git
+#      ↓
+# Deploy to EKS
+#      ↓
+# Verify rollout
+#      ↓
+# Smoke test test
+ 
