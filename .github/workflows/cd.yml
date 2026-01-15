@@ -101,10 +101,11 @@ jobs:
             --nodes 2
 
 
-      - name: Deploy to EKS using kubectl
+      - name: Deploy to EKS
         run: |
-          kubectl apply -k kustomize/base
-          kubectl rollout status deployment/web-deployment -n default
+         kubectl apply -k kustomize/base
+         kubectl rollout status deployment/erb-deployment -n default
+
       
       - name: Update Kustomize image
         run: |
