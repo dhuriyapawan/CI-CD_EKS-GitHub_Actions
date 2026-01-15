@@ -63,3 +63,12 @@ locals {
     prod    = 3
   }
 }
+variable "vpc_id" {
+  description = "VPC ID for EKS"
+  type        = string
+}
+
+variable "subnet_ids" {
+  description = "Subnets for EKS worker nodes"
+  type        = list(string)
+}
