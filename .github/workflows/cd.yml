@@ -83,9 +83,23 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Update kubeconfig
+      # Step 3: Install eksctl
+      - name: Install eksctl
         run: |
-          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+          curl -sSL https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_Linux_amd64.tar.gz | tar xz
+          sudo mv eksctl /usr/local/bin
+          eksctl version
+
+      # Step 4: Create EKS cluster
+      - name: Create EKS cluster
+        run: |
+          eksctl create cluster \
+            --name $EKS_CLUSTER_NAME \
+            --region $AWS_REGION \
+            --nodegroup-name workers \
+            --node-type t3.medium \
+            --nodes 2
+
 
       - name: Deploy to EKS using kubectl
         run: |
